@@ -1,38 +1,57 @@
-# shadcn/ui monorepo template
+# book2pdf
 
-This is a Next.js monorepo template with shadcn/ui.
+Monorepo with two conversion paths:
 
-## Adding components
+- Client-side userscript on HMU origin (recommended for scale)
+- Server API on Vercel with rate limiting
 
-To add components to your app, run the following command at the root of your `web` app:
-
-```bash
-pnpm dlx shadcn@latest add button -c apps/web
-```
-
-This will place the ui components in the `packages/ui/src/components` directory.
-
-## Using components
-
-To use the components in your app, import them from the `ui` package.
-
-```tsx
-import { Button } from "@workspace/ui/components/button";
-```
-
-## Client-side conversion (no Vercel compute)
+## Option 1: Client-side userscript (recommended)
 
 No extension-store publisher account is needed.
 
 1. Install Tampermonkey in your browser.
-2. Open the raw script URL and install it:
+2. Open and install:
 
 ```text
 https://raw.githubusercontent.com/1qh/book2pdf/main/tools/hmu-book2pdf.user.js
 ```
 
 3. Open any `FullBookReader.aspx` page on `thuvien.hmu.edu.vn`.
-4. Click `Batch to ZIP` in the bottom-right corner.
-5. Paste one reader URL per line, then convert.
+4. Click `Batch to ZIP`.
+5. Paste one reader URL per line and run conversion.
 
-The conversion runs entirely on the user device and downloads one ZIP of PDFs.
+This path runs on user devices, so Vercel compute cost stays low.
+
+## Option 2: Cloud API
+
+Endpoint:
+
+```text
+POST /api/convert
+```
+
+Behavior:
+
+- Accepts a `urls` string payload (JSON or form-data)
+- Returns one ZIP with generated PDFs
+- Includes `errors.txt` when some books fail
+- Applies in-memory rate limit per client IP
+
+Config via environment variables:
+
+- `API_RATE_LIMIT_MAX` (default `2`)
+- `API_RATE_LIMIT_WINDOW_MS` (default `600000` = 10 minutes)
+
+## Local development
+
+```bash
+bun install
+bun run dev
+```
+
+## Validation
+
+```bash
+bun run typecheck
+bun run build
+```

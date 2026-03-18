@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HMU FullBookReader Batch to ZIP (Client-side)
 // @namespace    https://github.com/1qh/book2pdf
-// @version      1.0.1
+// @version      1.1.0
 // @description  Convert multiple FullBookReader links to PDFs and download one ZIP on the user device.
 // @match        https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx*
 // @grant        GM_registerMenuCommand
@@ -135,78 +135,201 @@
     }
   }
 
-  const buildImageUrl = (spec, pageNumber) => {
-    const token = spec.padWidth > 0 ? String(pageNumber).padStart(spec.padWidth, "0") : String(pageNumber)
-    const path = `${spec.imageBasePath.replace(/\/+$/, "")}/${token}.${spec.ext}`
-    return path.startsWith("/") ? `${spec.siteBase}${path}` : `${spec.siteBase}/${path}`
+  const isJpeg = (bytes) => bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+
+  const isPng = (bytes) =>
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+
+  const normalizeToAbsolute = (value, siteBase) => {
+    if (!value) {
+      return value
+    }
+    if (/^https?:\/\//i.test(value)) {
+      return value
+    }
+    if (value.startsWith("/")) {
+      return `${siteBase}${value}`
+    }
+    return `${siteBase}/${value}`
   }
 
-  const probePadWidth = async (spec) => {
-    const candidates = [6, 5, 4, 3, 2, 1, 0]
+  const parseDiscovery = (html, siteBase) => {
+    const totalMatch = html.match(/br\.numLeafs\s*=\s*(\d+)/)
+    const leafMatch = html.match(/var\s+leafStr\s*=\s*'([0]+)'/)
+    const varTemplate = html.match(
+      /var\s+url\s*=\s*['"]([^'"]+)['"]\s*\+\s*leafStr\.replace\(\s*re\s*,\s*imgStr\s*\)\s*\+\s*['"]([^'"]*)['"]/i
+    )
+    const returnTemplate = html.match(
+      /return\s+['"]([^'"]+)['"]\s*\+\s*leafStr\.replace\(\s*re\s*,\s*imgStr\s*\)\s*\+\s*['"]([^'"]*)['"]/i
+    )
 
-    for (const padWidth of candidates) {
-      const probeSpec = {
-        readerUrl: spec.readerUrl,
-        siteBase: spec.siteBase,
-        imageBasePath: spec.imageBasePath,
-        ext: spec.ext,
-        padWidth,
+    const template = varTemplate || returnTemplate
+
+    let pagePrefix = null
+    let pageSuffix = null
+    let ext = null
+
+    if (template?.[1] !== undefined && template?.[2] !== undefined) {
+      pagePrefix = normalizeToAbsolute(template[1], siteBase)
+      pageSuffix = template[2]
+      const extMatch = pageSuffix.match(/\.([A-Za-z0-9]+)(?:[?#].*)?$/)
+      ext = extMatch?.[1]?.toLowerCase() || null
+    }
+
+    let pageOffset = 0
+    if (/imgStr\s*=\s*index\s*\.toString\(\)/i.test(html)) {
+      pageOffset = -1
+    }
+
+    const totalPages = totalMatch?.[1] ? Number.parseInt(totalMatch[1], 10) : null
+    const padWidth = leafMatch?.[1] ? leafMatch[1].length : null
+
+    return {
+      totalPages,
+      padWidth,
+      pagePrefix,
+      pageSuffix,
+      ext,
+      pageOffset,
+    }
+  }
+
+  const buildImageUrl = (spec, pageNumber) => {
+    const numericPage = pageNumber + spec.pageOffset
+    if (numericPage < 0) {
+      throw new Error("Invalid page index")
+    }
+
+    const token = spec.padWidth > 0 ? String(numericPage).padStart(spec.padWidth, "0") : String(numericPage)
+
+    if (spec.pagePrefix && spec.pageSuffix !== null) {
+      return `${spec.pagePrefix}${token}${spec.pageSuffix}`
+    }
+
+    const base = String(spec.imageBasePath || "").replace(/\/+$/, "")
+    if (/^https?:\/\//i.test(base)) {
+      return `${base}/${token}.${spec.ext}`
+    }
+    if (base.startsWith("/")) {
+      return `${spec.siteBase}${base}/${token}.${spec.ext}`
+    }
+    return `${spec.siteBase}/${base}/${token}.${spec.ext}`
+  }
+
+  const probePattern = async (baseSpec) => {
+    const extCandidates = Array.from(new Set([baseSpec.ext, "jpg", "jpeg", "png"].filter(Boolean)))
+    const padCandidates = Array.from(new Set([baseSpec.padWidth, 6, 5, 4, 3, 2, 1, 0].filter((v) => v !== null)))
+    const offsetCandidates = Array.from(new Set([baseSpec.pageOffset, 0, -1]))
+
+    const candidateSpecs = []
+
+    if (baseSpec.pagePrefix && baseSpec.pageSuffix !== null) {
+      for (const pageOffset of offsetCandidates) {
+        for (const padWidth of padCandidates) {
+          candidateSpecs.push({
+            ...baseSpec,
+            pageOffset,
+            padWidth,
+          })
+        }
       }
-      const imageUrl = buildImageUrl(probeSpec, 1)
+    }
 
+    for (const ext of extCandidates) {
+      for (const pageOffset of offsetCandidates) {
+        for (const padWidth of padCandidates) {
+          candidateSpecs.push({
+            ...baseSpec,
+            ext,
+            pageOffset,
+            padWidth,
+            pagePrefix: null,
+            pageSuffix: null,
+          })
+        }
+      }
+    }
+
+    for (const spec of candidateSpecs) {
       try {
-        const response = await fetchWithTimeout(imageUrl)
+        const response = await fetchWithTimeout(buildImageUrl(spec, 1))
         if (!response.ok) {
           continue
         }
+
+        const bytes = new Uint8Array(await response.arrayBuffer())
         const contentType = String(response.headers.get("content-type") || "").toLowerCase()
-        if (contentType.startsWith("image/")) {
-          return padWidth
+        const isImageType = contentType.startsWith("image/")
+
+        if (bytes.length > 0 && (isImageType || isJpeg(bytes) || isPng(bytes))) {
+          return spec
         }
       } catch {
       }
     }
 
-    throw new Error("Cannot determine image page pattern")
+    throw new Error("Cannot determine image URL pattern for this book")
   }
 
   const parseSpec = async (readerUrl) => {
     const parsed = new URL(readerUrl)
-    const imageBasePath = decodeURIComponent(qsIgnoreCase(parsed.searchParams, "url") || "").trim()
-    const rawTotalPages = (qsIgnoreCase(parsed.searchParams, "totalpage") || "").trim()
-    const ext = (qsIgnoreCase(parsed.searchParams, "ext") || "jpg").trim().toLowerCase().replace(/^\./, "") || "jpg"
+    const queryImageBasePath = decodeURIComponent(qsIgnoreCase(parsed.searchParams, "url") || "").trim()
+    const queryTotalPages = Number.parseInt((qsIgnoreCase(parsed.searchParams, "totalpage") || "").trim(), 10)
+    const queryExt = ((qsIgnoreCase(parsed.searchParams, "ext") || "jpg").trim().toLowerCase().replace(/^\./, "") || "jpg")
+    const siteBase = `${parsed.protocol}//${parsed.host}`
 
-    if (!imageBasePath) {
-      throw new Error("Missing Url parameter")
-    }
-
-    let totalPages = Number.parseInt(rawTotalPages, 10)
-    if (!Number.isFinite(totalPages) || totalPages < 1) {
-      const htmlRes = await fetchWithTimeout(readerUrl)
-      if (!htmlRes.ok) {
-        throw new Error("Could not read TotalPage")
+    let html = ""
+    try {
+      const response = await fetchWithTimeout(readerUrl)
+      if (response.ok) {
+        html = await response.text()
       }
-      const html = await htmlRes.text()
-      const pagesMatch = html.match(/br\.numLeafs\s*=\s*(\d+)/)
-      totalPages = pagesMatch?.[1] ? Number.parseInt(pagesMatch[1], 10) : 0
+    } catch {
     }
 
-    if (!Number.isFinite(totalPages) || totalPages < 1) {
+    const discovered = html ? parseDiscovery(html, siteBase) : null
+
+    const totalPages =
+      discovered?.totalPages && Number.isFinite(discovered.totalPages) && discovered.totalPages > 0
+        ? discovered.totalPages
+        : Number.isFinite(queryTotalPages) && queryTotalPages > 0
+          ? queryTotalPages
+          : 0
+
+    if (!totalPages) {
       throw new Error("Invalid TotalPage")
     }
 
-    const spec = {
-      readerUrl,
-      siteBase: `${parsed.protocol}//${parsed.host}`,
-      imageBasePath,
-      totalPages,
-      ext,
-      padWidth: 0,
-      bookId: deriveBookId(imageBasePath),
+    const imageBasePath = queryImageBasePath
+    const pagePrefix = discovered?.pagePrefix || null
+    const pageSuffix = discovered?.pageSuffix || null
+
+    if (!imageBasePath && !pagePrefix) {
+      throw new Error("Missing Url parameter")
     }
 
-    spec.padWidth = await probePadWidth(spec)
-    return spec
+    const baseSpec = {
+      readerUrl,
+      siteBase,
+      imageBasePath,
+      totalPages,
+      ext: discovered?.ext || queryExt,
+      padWidth: discovered?.padWidth ?? 6,
+      pageOffset: discovered?.pageOffset ?? 0,
+      pagePrefix,
+      pageSuffix,
+      bookId: deriveBookId(imageBasePath || pagePrefix || readerUrl),
+    }
+
+    return probePattern(baseSpec)
   }
 
   const downloadPageWithRetry = async (spec, pageNumber) => {
@@ -214,16 +337,15 @@
 
     for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
       try {
-        const imageUrl = buildImageUrl(spec, pageNumber)
-        const response = await fetchWithTimeout(imageUrl)
+        const response = await fetchWithTimeout(buildImageUrl(spec, pageNumber))
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
         }
 
         const bytes = new Uint8Array(await response.arrayBuffer())
-        if (!(bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) {
-          throw new Error("Not a JPEG stream")
+        if (!bytes.length) {
+          throw new Error("Empty image payload")
         }
 
         return bytes
@@ -238,27 +360,49 @@
     throw lastError
   }
 
-  const convertBookToPdf = async (spec, onProgress) => {
-    if (spec.ext !== "jpg" && spec.ext !== "jpeg") {
-      throw new Error("Only jpg/jpeg is supported")
+  const embedImage = async (pdfDoc, bytes) => {
+    if (isJpeg(bytes)) {
+      return pdfDoc.embedJpg(bytes)
     }
+    if (isPng(bytes)) {
+      return pdfDoc.embedPng(bytes)
+    }
+    throw new Error("Unsupported image bytes")
+  }
 
+  const convertBookToPdf = async (spec, onProgress) => {
     const pdfDoc = await PDFLib.PDFDocument.create()
+    const failedPages = []
+    let successPages = 0
 
     for (let page = 1; page <= spec.totalPages; page += 1) {
-      const bytes = await downloadPageWithRetry(spec, page)
-      const jpg = await pdfDoc.embedJpg(bytes)
-      const pdfPage = pdfDoc.addPage([jpg.width, jpg.height])
-      pdfPage.drawImage(jpg, {
-        x: 0,
-        y: 0,
-        width: jpg.width,
-        height: jpg.height,
-      })
+      try {
+        const bytes = await downloadPageWithRetry(spec, page)
+        const image = await embedImage(pdfDoc, bytes)
+        const pdfPage = pdfDoc.addPage([image.width, image.height])
+        pdfPage.drawImage(image, {
+          x: 0,
+          y: 0,
+          width: image.width,
+          height: image.height,
+        })
+        successPages += 1
+      } catch {
+        failedPages.push(page)
+      }
+
       onProgress(page, spec.totalPages)
     }
 
-    return pdfDoc.save()
+    if (successPages === 0) {
+      throw new Error("No pages could be downloaded")
+    }
+
+    return {
+      pdfBytes: await pdfDoc.save(),
+      failedPages,
+      successPages,
+    }
   }
 
   const downloadBlob = (blob, filename) => {
@@ -445,6 +589,7 @@
         const zip = new JSZip()
         const failures = []
         const totalBooks = urls.length
+        let convertedBooks = 0
 
         for (let index = 0; index < urls.length; index += 1) {
           const readerUrl = urls[index]
@@ -454,19 +599,31 @@
             const spec = await parseSpec(readerUrl)
             setStatus(`Converting ${spec.bookId} (${spec.totalPages} pages)`)
 
-            const pdfBytes = await convertBookToPdf(spec, (page, totalPages) => {
+            const result = await convertBookToPdf(spec, (page, totalPages) => {
               const localProgress = page / Math.max(1, totalPages)
               const overallProgress = ((index + localProgress) / totalBooks) * 100
               setProgress(overallProgress)
               setStatus(`Converting ${spec.bookId} page ${page}/${totalPages}`)
             })
 
-            zip.file(`${spec.bookId}.pdf`, pdfBytes)
+            zip.file(`${spec.bookId}.pdf`, result.pdfBytes)
+            convertedBooks += 1
+
+            if (result.failedPages.length > 0) {
+              failures.push(
+                `${readerUrl}\n  -> Partial PDF. Missing pages: ${result.failedPages.slice(0, 30).join(",")}${result.failedPages.length > 30 ? "..." : ""}`
+              )
+            }
+
             setProgress(((index + 1) / totalBooks) * 100)
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             failures.push(`${readerUrl}\n  -> ${message}`)
           }
+        }
+
+        if (convertedBooks === 0) {
+          throw new Error("No PDFs were generated")
         }
 
         if (failures.length > 0) {

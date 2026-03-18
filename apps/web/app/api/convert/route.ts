@@ -15,6 +15,11 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
+const RATE_LIMIT_MAX = Number.parseInt(process.env.API_RATE_LIMIT_MAX ?? "2", 10)
+const RATE_LIMIT_WINDOW_MS = Number.parseInt(process.env.API_RATE_LIMIT_WINDOW_MS ?? `${10 * 60 * 1000}`, 10)
+
+const rateStore = new Map<string, { count: number; resetAt: number }>()
+
 const OPTIONS = {
   timeoutMs: 45_000,
   retries: 4,
@@ -30,6 +35,67 @@ function plainResponse(status: number, message: string): Response {
       "content-type": "text/plain; charset=utf-8",
     },
   })
+}
+
+function getClientKey(request: NextRequest): string {
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+  const realIp = request.headers.get("x-real-ip")?.trim()
+  return forwarded || realIp || "unknown"
+}
+
+function pruneRateStore(now: number): void {
+  if (rateStore.size < 2000) {
+    return
+  }
+  for (const [key, value] of rateStore.entries()) {
+    if (now >= value.resetAt) {
+      rateStore.delete(key)
+    }
+  }
+}
+
+function consumeRateLimit(key: string): {
+  allowed: boolean
+  remaining: number
+  retryAfterSec: number
+  limit: number
+} {
+  const limit = Number.isFinite(RATE_LIMIT_MAX) && RATE_LIMIT_MAX > 0 ? RATE_LIMIT_MAX : 2
+  const windowMs = Number.isFinite(RATE_LIMIT_WINDOW_MS) && RATE_LIMIT_WINDOW_MS > 0 ? RATE_LIMIT_WINDOW_MS : 600000
+  const now = Date.now()
+
+  pruneRateStore(now)
+
+  const current = rateStore.get(key)
+  if (!current || now >= current.resetAt) {
+    const resetAt = now + windowMs
+    rateStore.set(key, { count: 1, resetAt })
+    return {
+      allowed: true,
+      remaining: Math.max(0, limit - 1),
+      retryAfterSec: Math.ceil(windowMs / 1000),
+      limit,
+    }
+  }
+
+  if (current.count >= limit) {
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
+      limit,
+    }
+  }
+
+  current.count += 1
+  rateStore.set(key, current)
+
+  return {
+    allowed: true,
+    remaining: Math.max(0, limit - current.count),
+    retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
+    limit,
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,6 +127,21 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  const key = getClientKey(request)
+  const rate = consumeRateLimit(key)
+
+  if (!rate.allowed) {
+    return new Response("Rate limit exceeded", {
+      status: 429,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "retry-after": String(rate.retryAfterSec),
+        "x-ratelimit-limit": String(rate.limit),
+        "x-ratelimit-remaining": String(rate.remaining),
+      },
+    })
+  }
+
   const abortSignal = request.signal
 
   let urlsText = ""
@@ -159,6 +240,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       "content-disposition": `attachment; filename="${buildZipName(new Date())}"`,
       "cache-control": "no-store",
       "x-hmu-accepted-books": String(prepared.books.length),
+      "x-ratelimit-limit": String(rate.limit),
+      "x-ratelimit-remaining": String(rate.remaining),
     },
   })
 }
