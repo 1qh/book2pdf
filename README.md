@@ -62,7 +62,7 @@ Copy env template to repo root:
 cp apps/web/.env.example .env
 ```
 
-Root scripts use `dotenv-cli` through `bun run with-env -- ...` and automatically load `/.env` when present.
+Because this repo uses Bun, running root scripts with `bun run ...` automatically loads `/.env`.
 
 ## Local development
 

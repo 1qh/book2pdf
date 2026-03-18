@@ -4,17 +4,15 @@
   "private": true,
   "packageManager": "bun@1.3.10",
   "scripts": {
-    "with-env": "./scripts/with-env.sh",
-    "build": "bun run with-env -- turbo build",
-    "dev": "bun run with-env -- turbo dev",
-    "lint": "bun run with-env -- turbo lint",
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
     "format": "turbo format",
-    "typecheck": "bun run with-env -- turbo typecheck"
+    "typecheck": "turbo typecheck"
   },
   "devDependencies": {
     "@workspace/eslint-config": "workspace:*",
     "@workspace/typescript-config": "workspace:*",
-    "dotenv-cli": "^11.0.0",
     "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "turbo": "^2.8.17",
