@@ -49,6 +49,7 @@ Config via environment variables:
 - `AWS_REGION` (default `us-east-1`)
 - `S3_BUCKET`
 - `S3_PREFIX` (default `book2pdf-cache`)
+- `S3_PUT_STORAGE_CLASS` (default `STANDARD`)
 - `S3_CACHE_MAX_BYTES` (default `209715200`)
 - `MEMORY_CACHE_MAX_ITEMS` (default `32`)
 - `MEMORY_CACHE_TTL_MS` (default `3600000`)

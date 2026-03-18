@@ -16,7 +16,14 @@ interface S3ClientLike {
 interface S3MiniLike {
   objectExists(key: string): Promise<boolean | null>
   getObjectArrayBuffer(key: string): Promise<ArrayBuffer | null>
-  putObject(key: string, data: Uint8Array | string, contentType?: string): Promise<unknown>
+  putObject(
+    key: string,
+    data: Uint8Array | string,
+    contentType?: string,
+    ssecHeaders?: Record<string, string>,
+    additionalHeaders?: Record<string, string>,
+    contentLength?: number
+  ): Promise<unknown>
 }
 
 interface CacheClient {
@@ -38,6 +45,7 @@ const CACHE_ENABLED = process.env.S3_CACHE_ENABLED === "true"
 const MEMORY_CACHE_MAX_ITEMS = Number.parseInt(process.env.MEMORY_CACHE_MAX_ITEMS ?? "32", 10)
 const MEMORY_CACHE_TTL_MS = Number.parseInt(process.env.MEMORY_CACHE_TTL_MS ?? `${60 * 60 * 1000}`, 10)
 const MEMORY_CACHE_ENABLED = Number.isFinite(MEMORY_CACHE_MAX_ITEMS) && MEMORY_CACHE_MAX_ITEMS > 0
+const S3_PUT_STORAGE_CLASS = envValue("S3_PUT_STORAGE_CLASS", "STANDARD")
 
 let cacheClientPromise: Promise<CacheClient | null> | null = null
 const memoryZipCache = MEMORY_CACHE_ENABLED
@@ -106,11 +114,13 @@ class S3MiniFile implements S3FileLike {
   private readonly client: S3MiniLike
   private readonly key: string
   private readonly type?: string
+  private readonly storageClass?: string
 
-  constructor(client: S3MiniLike, key: string, type?: string) {
+  constructor(client: S3MiniLike, key: string, type?: string, storageClass?: string) {
     this.client = client
     this.key = key
     this.type = type
+    this.storageClass = storageClass
   }
 
   async exists(): Promise<boolean> {
@@ -127,20 +137,23 @@ class S3MiniFile implements S3FileLike {
   }
 
   async write(data: Uint8Array): Promise<void> {
-    await this.client.putObject(this.key, data, this.type || "application/octet-stream")
+    const headers = this.storageClass ? { "x-amz-storage-class": this.storageClass } : undefined
+    await this.client.putObject(this.key, data, this.type || "application/octet-stream", undefined, headers)
   }
 }
 
 class S3MiniClientAdapter implements S3ClientLike {
   private readonly client: S3MiniLike
+  private readonly storageClass?: string
 
-  constructor(client: S3MiniLike) {
+  constructor(client: S3MiniLike, storageClass?: string) {
     this.client = client
+    this.storageClass = storageClass
   }
 
   file(key: string, options?: { bucket?: string; type?: string }): S3FileLike {
     void options?.bucket
-    return new S3MiniFile(this.client, key, options?.type)
+    return new S3MiniFile(this.client, key, options?.type, this.storageClass)
   }
 }
 
@@ -171,10 +184,15 @@ function createS3MiniClient(config: S3Config): CacheClient | null {
   }) as unknown as S3MiniLike
 
   return {
-    client: new S3MiniClientAdapter(client),
+    client: new S3MiniClientAdapter(client, S3_PUT_STORAGE_CLASS),
     bucket: config.bucket,
     prefix: config.prefix,
   }
+}
+
+function isInvalidObjectStateError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("InvalidObjectState")
 }
 
 async function createClient(): Promise<CacheClient | null> {
@@ -268,13 +286,20 @@ export async function readCachedZip(cacheKey: string): Promise<Uint8Array | null
     type: "application/zip",
   })
 
-  const exists = await file.exists()
-  if (!exists) {
-    return null
-  }
+  try {
+    const exists = await file.exists()
+    if (!exists) {
+      return null
+    }
 
-  const data = await file.arrayBuffer()
-  return new Uint8Array(data)
+    const data = await file.arrayBuffer()
+    return new Uint8Array(data)
+  } catch (error) {
+    if (isInvalidObjectStateError(error)) {
+      return null
+    }
+    throw error
+  }
 }
 
 export async function writeCachedZip(cacheKey: string, bytes: Uint8Array): Promise<boolean> {

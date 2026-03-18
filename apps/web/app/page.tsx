@@ -150,7 +150,7 @@ export default function Page() {
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-4xl items-center px-4 py-10">
       <div className="grid w-full gap-4 lg:grid-cols-2">
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle>Option 1: client-side userscript</CardTitle>
             <CardDescription>Recommended for high traffic and zero server conversion cost.</CardDescription>
@@ -173,7 +173,7 @@ export default function Page() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle>Option 2: cloud API</CardTitle>
             <CardDescription>Rate-limited server conversion for users who skip userscript setup.</CardDescription>
@@ -187,6 +187,7 @@ export default function Page() {
                   id="urls"
                   name="urls"
                   rows={10}
+                  className="field-sizing-fixed min-h-52 min-w-0 max-w-full"
                   placeholder="One FullBookReader URL per line"
                   value={urls}
                   onChange={(event) => setUrls(event.target.value)}

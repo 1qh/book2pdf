@@ -438,6 +438,7 @@
 
     const panel = document.createElement("div")
     panel.style.width = "min(760px, calc(100vw - 24px))"
+    panel.style.boxSizing = "border-box"
     panel.style.background = "#ffffff"
     panel.style.border = "1px solid #e5e7eb"
     panel.style.borderRadius = "12px"
@@ -459,7 +460,11 @@
 
     const textarea = document.createElement("textarea")
     textarea.rows = 10
+    textarea.style.boxSizing = "border-box"
+    textarea.style.display = "block"
     textarea.style.width = "100%"
+    textarea.style.maxWidth = "100%"
+    textarea.style.minWidth = "0"
     textarea.style.padding = "10px"
     textarea.style.border = "1px solid #d1d5db"
     textarea.style.borderRadius = "8px"
