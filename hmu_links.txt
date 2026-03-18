@@ -1,7 +1,3 @@
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202512231114-5ad4e2e3-d8b7-43a7-a95f-dab8dcbed86d//FullPreview&TotalPage=405&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202112301045-89d5183d-8c6a-4960-80e1-6d99e2302006//FullPreview&TotalPage=551&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202112301044-fe7bdee8-958b-4d11-a623-faa5ecfd2392//FullPreview&TotalPage=352&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202112301044-efa959ec-c6f5-4876-bb03-87afb181bfef//FullPreview&TotalPage=451&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202412191338-cd9ae09f-b5e9-43fe-8b80-767326a43068//FullPreview&TotalPage=101&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202412191339-3589d18d-d557-4c64-87d3-aceec239d479//FullPreview&TotalPage=301&ext=jpg#page/1/mode/2up
-https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202512151330-855d77d7-fa87-4ccf-84f6-aa291e067fff//FullPreview&TotalPage=245&ext=jpg#page/1/mode/2up
+# One FullBookReader URL per line.
+# Lines starting with # are ignored.
+https://example.com/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/BOOK_ID//FullPreview&TotalPage=123&ext=jpg#page/1/mode/2up

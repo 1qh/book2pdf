@@ -1,6 +1,6 @@
 # HMU Book Reader to PDF
 
-Convert `FullBookReader.aspx` links from `thuvien.hmu.edu.vn` into PDF files.
+Convert supported `FullBookReader.aspx` links into PDF files.
 
 ## Next.js app (Vercel deploy)
 

@@ -97,8 +97,8 @@ def pick_download_filename(header_value: Optional[str]) -> str:
 def html_page(config: AppConfig) -> str:
     default_urls = "\n".join(
         [
-            "https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202512231114-5ad4e2e3-d8b7-43a7-a95f-dab8dcbed86d//FullPreview&TotalPage=405&ext=jpg#page/1/mode/2up",
-            "https://thuvien.hmu.edu.vn/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/202112301045-89d5183d-8c6a-4960-80e1-6d99e2302006//FullPreview&TotalPage=551&ext=jpg#page/1/mode/2up",
+            "https://example.com/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/BOOK_ID//FullPreview&TotalPage=123&ext=jpg#page/1/mode/2up",
+            "https://example.com/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/ANOTHER_BOOK_ID//FullPreview&TotalPage=456&ext=jpg#page/1/mode/2up",
         ]
     )
     escaped_defaults = html.escape(default_urls)
