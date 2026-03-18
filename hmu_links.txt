@@ -1,3 +1,0 @@
-# One FullBookReader URL per line.
-# Lines starting with # are ignored.
-https://example.com/pages/cms/FullBookReader.aspx?Url=/pages/cms/TempDir/books/BOOK_ID//FullPreview&TotalPage=123&ext=jpg#page/1/mode/2up

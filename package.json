@@ -1,29 +1,28 @@
 {
-  "name": "hmu-book2pdf-nextjs",
-  "version": "1.0.0",
+  "name": "a",
+  "version": "0.0.1",
   "private": true,
   "packageManager": "bun@1.3.10",
-  "engines": {
-    "bun": ">=1.3.10"
-  },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "archiver": "^7.0.1",
-    "next": "^16.1.7",
-    "pdf-lib": "^1.17.1",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "format": "turbo format",
+    "typecheck": "turbo typecheck"
   },
   "devDependencies": {
-    "@types/archiver": "^7.0.0",
-    "@types/node": "^25.5.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "typescript": "^5.9.3"
-  }
+    "@workspace/eslint-config": "workspace:*",
+    "@workspace/typescript-config": "workspace:*",
+    "prettier": "^3.8.1",
+    "prettier-plugin-tailwindcss": "^0.7.2",
+    "turbo": "^2.8.17",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }
