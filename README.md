@@ -36,11 +36,26 @@ Behavior:
 - Returns one ZIP with generated PDFs
 - Includes `errors.txt` when some books fail
 - Applies in-memory rate limit per client IP
+- Supports optional S3 ZIP cache
 
 Config via environment variables:
 
 - `API_RATE_LIMIT_MAX` (default `2`)
 - `API_RATE_LIMIT_WINDOW_MS` (default `600000` = 10 minutes)
+- `S3_CACHE_ENABLED` (`true` to enable)
+- `S3_BUCKET`
+- `S3_REGION` (default `us-east-1`)
+- `S3_ENDPOINT` (for S3-compatible providers)
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `S3_PREFIX` (default `book2pdf-cache`)
+- `S3_CACHE_MAX_BYTES` (default `209715200`)
+
+Copy env template:
+
+```bash
+cp apps/web/.env.example apps/web/.env.local
+```
 
 ## Local development
 

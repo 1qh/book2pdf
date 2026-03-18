@@ -7,9 +7,11 @@ import {
   buildFailureText,
   buildZipName,
   convertOnePreparedBook,
+  parseUrlsText,
   preflightBooks,
   type ConversionFailure,
 } from "@/lib/hmu-converter"
+import { buildZipCacheKey, isS3CacheAvailable, readCachedZip, writeCachedZip } from "@/lib/s3-cache"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -27,6 +29,8 @@ const OPTIONS = {
   maxPagesPerBook: 650,
   maxTotalPages: 2200,
 }
+
+const MAX_CACHE_CAPTURE_BYTES = Number.parseInt(process.env.S3_CACHE_MAX_BYTES ?? `${200 * 1024 * 1024}`, 10)
 
 function plainResponse(status: number, message: string): Response {
   return new Response(message, {
@@ -145,11 +149,13 @@ export async function POST(request: NextRequest): Promise<Response> {
   const abortSignal = request.signal
 
   let urlsText = ""
+  let normalizedUrls: string[] = []
   try {
     urlsText = await getUrlsText(request)
     if (urlsText.trim().length === 0) {
       throw new InputError("No URLs provided.")
     }
+    normalizedUrls = parseUrlsText(urlsText, OPTIONS.maxUrls)
   } catch (error) {
     if (error instanceof InputError) {
       return plainResponse(400, error.message)
@@ -157,9 +163,32 @@ export async function POST(request: NextRequest): Promise<Response> {
     return plainResponse(400, "Invalid request body.")
   }
 
+  const cacheKey = buildZipCacheKey(normalizedUrls)
+  const cacheAvailable = await isS3CacheAvailable()
+  if (cacheAvailable) {
+    try {
+      const cachedZip = await readCachedZip(cacheKey)
+      if (cachedZip && cachedZip.length > 0) {
+        const responseBytes = Uint8Array.from(cachedZip)
+        return new Response(responseBytes.buffer, {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": `attachment; filename="${buildZipName(new Date())}"`,
+            "cache-control": "no-store",
+            "x-cache-status": "HIT_S3",
+            "x-ratelimit-limit": String(rate.limit),
+            "x-ratelimit-remaining": String(rate.remaining),
+          },
+        })
+      }
+    } catch {
+    }
+  }
+
   let prepared: Awaited<ReturnType<typeof preflightBooks>>
   try {
-    prepared = await preflightBooks(urlsText, {
+    prepared = await preflightBooks(normalizedUrls.join("\n"), {
       ...OPTIONS,
       abortSignal,
     })
@@ -178,8 +207,46 @@ export async function POST(request: NextRequest): Promise<Response> {
   })
   const output = new PassThrough()
   archive.pipe(output)
+
+  const captureChunks: Buffer[] = []
+  let captureBytes = 0
+  let captureDropped = false
+  let captureStream: PassThrough | null = null
+
+  if (cacheAvailable) {
+    captureStream = new PassThrough()
+    archive.pipe(captureStream)
+
+    captureStream.on("data", (chunk: Buffer) => {
+      if (captureDropped) {
+        return
+      }
+
+      captureBytes += chunk.length
+      if (captureBytes > Math.max(1, MAX_CACHE_CAPTURE_BYTES)) {
+        captureDropped = true
+        captureChunks.length = 0
+        return
+      }
+
+      captureChunks.push(Buffer.from(chunk))
+    })
+
+    captureStream.on("end", () => {
+      if (captureDropped || captureChunks.length === 0) {
+        return
+      }
+
+      const merged = Buffer.concat(captureChunks)
+      void writeCachedZip(cacheKey, new Uint8Array(merged)).catch(() => {})
+    })
+  }
+
   archive.on("error", (error: Error) => {
     output.destroy(error)
+    if (captureStream) {
+      captureStream.destroy(error)
+    }
   })
 
   const work = (async (): Promise<void> => {
@@ -240,6 +307,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       "content-disposition": `attachment; filename="${buildZipName(new Date())}"`,
       "cache-control": "no-store",
       "x-hmu-accepted-books": String(prepared.books.length),
+      "x-cache-status": cacheAvailable ? "MISS_S3" : "DISABLED",
       "x-ratelimit-limit": String(rate.limit),
       "x-ratelimit-remaining": String(rate.remaining),
     },
