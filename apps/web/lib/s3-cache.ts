@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { LRUCache } from "lru-cache"
+import { S3mini } from "s3mini"
 
 interface S3FileLike {
   exists(): Promise<boolean>
@@ -10,6 +11,12 @@ interface S3FileLike {
 
 interface S3ClientLike {
   file(key: string, options?: { bucket?: string; type?: string }): S3FileLike
+}
+
+interface S3MiniLike {
+  objectExists(key: string): Promise<boolean | null>
+  getObjectArrayBuffer(key: string): Promise<ArrayBuffer | null>
+  putObject(key: string, data: Uint8Array | string, contentType?: string): Promise<unknown>
 }
 
 interface CacheClient {
@@ -95,6 +102,81 @@ async function createBunClient(config: S3Config): Promise<CacheClient | null> {
   }
 }
 
+class S3MiniFile implements S3FileLike {
+  private readonly client: S3MiniLike
+  private readonly key: string
+  private readonly type?: string
+
+  constructor(client: S3MiniLike, key: string, type?: string) {
+    this.client = client
+    this.key = key
+    this.type = type
+  }
+
+  async exists(): Promise<boolean> {
+    const value = await this.client.objectExists(this.key)
+    return value === true
+  }
+
+  async arrayBuffer(): Promise<ArrayBuffer> {
+    const data = await this.client.getObjectArrayBuffer(this.key)
+    if (!data) {
+      throw new Error("Missing object data")
+    }
+    return data
+  }
+
+  async write(data: Uint8Array): Promise<void> {
+    await this.client.putObject(this.key, data, this.type || "application/octet-stream")
+  }
+}
+
+class S3MiniClientAdapter implements S3ClientLike {
+  private readonly client: S3MiniLike
+
+  constructor(client: S3MiniLike) {
+    this.client = client
+  }
+
+  file(key: string, options?: { bucket?: string; type?: string }): S3FileLike {
+    void options?.bucket
+    return new S3MiniFile(this.client, key, options?.type)
+  }
+}
+
+function withBucketInEndpoint(endpoint: string | undefined, bucket: string): string | null {
+  if (!endpoint) {
+    return null
+  }
+
+  const trimmed = endpoint.replace(/\/+$/, "")
+  if (!trimmed) {
+    return null
+  }
+
+  return `${trimmed}/${bucket}`
+}
+
+function createS3MiniClient(config: S3Config): CacheClient | null {
+  const endpoint = withBucketInEndpoint(config.endpoint, config.bucket)
+  if (!endpoint) {
+    return null
+  }
+
+  const client = new S3mini({
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    endpoint,
+    region: config.region || "auto",
+  }) as unknown as S3MiniLike
+
+  return {
+    client: new S3MiniClientAdapter(client),
+    bucket: config.bucket,
+    prefix: config.prefix,
+  }
+}
+
 async function createClient(): Promise<CacheClient | null> {
   if (!CACHE_ENABLED) {
     return null
@@ -111,14 +193,21 @@ async function createClient(): Promise<CacheClient | null> {
     return null
   }
 
-  return createBunClient({
+  const config = {
     bucket,
     accessKeyId,
     secretAccessKey,
     endpoint: endpoint || undefined,
     region,
     prefix,
-  })
+  }
+
+  const bunClient = await createBunClient(config)
+  if (bunClient) {
+    return bunClient
+  }
+
+  return createS3MiniClient(config)
 }
 
 async function getClient(): Promise<CacheClient | null> {

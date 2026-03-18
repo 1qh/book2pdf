@@ -26,6 +26,7 @@
         "pdf-lib": "^1.17.1",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
+        "s3mini": "^0.9.1",
       },
       "devDependencies": {
         "@tailwindcss/postcss": "^4.1.18",
@@ -1373,6 +1374,8 @@
     "run-applescript": ["run-applescript@7.1.0", "", {}, "sha512-DPe5pVFaAsinSaV6QjQ6gdiedWDcRCbUuiQfQa2wmWV7+xC9bGulGI8+TdRmoFkAPaBXk8CrAbnlY2ISniJ47Q=="],
 
     "run-parallel": ["run-parallel@1.2.0", "", { "dependencies": { "queue-microtask": "^1.2.2" } }, "sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA=="],
+
+    "s3mini": ["s3mini@0.9.1", "", {}, "sha512-aIsdMFbNEjA10KRRTWuEn52zX8kkB5ByrWOoyZg/WFrsMLqGbypTf0y2M7DdltoKkl+FYzl3g/SXJLvVZ54eXw=="],
 
     "safe-array-concat": ["safe-array-concat@1.1.3", "", { "dependencies": { "call-bind": "^1.0.8", "call-bound": "^1.0.2", "get-intrinsic": "^1.2.6", "has-symbols": "^1.1.0", "isarray": "^2.0.5" } }, "sha512-AURm5f0jYEOydBj7VQlVvDrjeFgthDdEF5H1dP+6mNpoXOMo1quQqJ4wvJDyRZ9+pO3kGWoOdmV08cSv2aJV6Q=="],
 
