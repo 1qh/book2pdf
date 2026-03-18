@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto"
 
+import { LRUCache } from "lru-cache"
+
 interface S3FileLike {
   exists(): Promise<boolean>
   arrayBuffer(): Promise<ArrayBuffer>
@@ -16,9 +18,29 @@ interface CacheClient {
   prefix: string
 }
 
+interface S3Config {
+  bucket: string
+  accessKeyId: string
+  secretAccessKey: string
+  endpoint?: string
+  region: string
+  prefix: string
+}
+
 const CACHE_ENABLED = process.env.S3_CACHE_ENABLED === "true"
+const MEMORY_CACHE_MAX_ITEMS = Number.parseInt(process.env.MEMORY_CACHE_MAX_ITEMS ?? "32", 10)
+const MEMORY_CACHE_TTL_MS = Number.parseInt(process.env.MEMORY_CACHE_TTL_MS ?? `${60 * 60 * 1000}`, 10)
+const MEMORY_CACHE_ENABLED = Number.isFinite(MEMORY_CACHE_MAX_ITEMS) && MEMORY_CACHE_MAX_ITEMS > 0
 
 let cacheClientPromise: Promise<CacheClient | null> | null = null
+const memoryZipCache = MEMORY_CACHE_ENABLED
+  ? new LRUCache<string, Uint8Array>({
+      max: MEMORY_CACHE_MAX_ITEMS,
+      ttl: Number.isFinite(MEMORY_CACHE_TTL_MS) && MEMORY_CACHE_TTL_MS > 0 ? MEMORY_CACHE_TTL_MS : 60 * 60 * 1000,
+      updateAgeOnGet: true,
+      ttlAutopurge: true,
+    })
+  : null
 
 function envValue(name: string, fallback = ""): string {
   const value = process.env[name]
@@ -34,23 +56,8 @@ function buildObjectKey(prefix: string, key: string): string {
   return `${normalizedPrefix}/${normalizedKey}`
 }
 
-async function createClient(): Promise<CacheClient | null> {
-  if (!CACHE_ENABLED) {
-    return null
-  }
-
+async function createBunClient(config: S3Config): Promise<CacheClient | null> {
   if (!process.versions?.bun) {
-    return null
-  }
-
-  const bucket = envValue("S3_BUCKET")
-  const accessKeyId = envValue("S3_ACCESS_KEY_ID", envValue("AWS_ACCESS_KEY_ID"))
-  const secretAccessKey = envValue("S3_SECRET_ACCESS_KEY", envValue("AWS_SECRET_ACCESS_KEY"))
-  const endpoint = envValue("S3_ENDPOINT")
-  const region = envValue("S3_REGION", envValue("AWS_REGION", "us-east-1"))
-  const prefix = envValue("S3_PREFIX", "book2pdf-cache")
-
-  if (!bucket || !accessKeyId || !secretAccessKey) {
     return null
   }
 
@@ -74,18 +81,44 @@ async function createClient(): Promise<CacheClient | null> {
   }) => S3ClientLike
 
   const client = new S3ClientCtor({
-    bucket,
-    region,
-    accessKeyId,
-    secretAccessKey,
-    endpoint: endpoint || undefined,
+    bucket: config.bucket,
+    region: config.region,
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    endpoint: config.endpoint,
   })
 
   return {
     client,
-    bucket,
-    prefix,
+    bucket: config.bucket,
+    prefix: config.prefix,
   }
+}
+
+async function createClient(): Promise<CacheClient | null> {
+  if (!CACHE_ENABLED) {
+    return null
+  }
+
+  const bucket = envValue("S3_BUCKET", envValue("AWS_S3_BUCKET", envValue("AWS_BUCKET")))
+  const accessKeyId = envValue("AWS_ACCESS_KEY_ID", envValue("S3_ACCESS_KEY_ID"))
+  const secretAccessKey = envValue("AWS_SECRET_ACCESS_KEY", envValue("S3_SECRET_ACCESS_KEY"))
+  const endpoint = envValue("AWS_ENDPOINT_URL_S3", envValue("S3_ENDPOINT", envValue("AWS_S3_ENDPOINT")))
+  const region = envValue("AWS_REGION", envValue("S3_REGION", "us-east-1"))
+  const prefix = envValue("S3_PREFIX", "book2pdf-cache")
+
+  if (!bucket || !accessKeyId || !secretAccessKey) {
+    return null
+  }
+
+  return createBunClient({
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    endpoint: endpoint || undefined,
+    region,
+    prefix,
+  })
 }
 
 async function getClient(): Promise<CacheClient | null> {
@@ -98,6 +131,27 @@ async function getClient(): Promise<CacheClient | null> {
 export async function isS3CacheAvailable(): Promise<boolean> {
   const client = await getClient()
   return client !== null
+}
+
+export function readMemoryCachedZip(cacheKey: string): Uint8Array | null {
+  if (!memoryZipCache) {
+    return null
+  }
+
+  const value = memoryZipCache.get(cacheKey)
+  if (!value) {
+    return null
+  }
+
+  return Uint8Array.from(value)
+}
+
+export function writeMemoryCachedZip(cacheKey: string, bytes: Uint8Array): void {
+  if (!memoryZipCache) {
+    return
+  }
+
+  memoryZipCache.set(cacheKey, Uint8Array.from(bytes))
 }
 
 export function buildZipCacheKey(urls: string[]): string {

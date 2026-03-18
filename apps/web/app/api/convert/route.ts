@@ -11,7 +11,14 @@ import {
   preflightBooks,
   type ConversionFailure,
 } from "@/lib/hmu-converter"
-import { buildZipCacheKey, isS3CacheAvailable, readCachedZip, writeCachedZip } from "@/lib/s3-cache"
+import {
+  buildZipCacheKey,
+  isS3CacheAvailable,
+  readCachedZip,
+  readMemoryCachedZip,
+  writeCachedZip,
+  writeMemoryCachedZip,
+} from "@/lib/s3-cache"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -31,6 +38,7 @@ const OPTIONS = {
 }
 
 const MAX_CACHE_CAPTURE_BYTES = Number.parseInt(process.env.S3_CACHE_MAX_BYTES ?? `${200 * 1024 * 1024}`, 10)
+const inFlightZipCache = new Map<string, Promise<Uint8Array | null>>()
 
 function plainResponse(status: number, message: string): Response {
   return new Response(message, {
@@ -106,6 +114,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const arrayBuffer = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(arrayBuffer).set(bytes)
+  return arrayBuffer
+}
+
+function buildZipResponse(
+  bytes: Uint8Array,
+  cacheStatus: string,
+  rate: { limit: number; remaining: number }
+): Response {
+  return new Response(toArrayBuffer(bytes), {
+    status: 200,
+    headers: {
+      "content-type": "application/zip",
+      "content-disposition": `attachment; filename="${buildZipName(new Date())}"`,
+      "cache-control": "no-store",
+      "x-cache-status": cacheStatus,
+      "x-ratelimit-limit": String(rate.limit),
+      "x-ratelimit-remaining": String(rate.remaining),
+    },
+  })
+}
+
 async function getUrlsText(request: NextRequest): Promise<string> {
   const contentType = (request.headers.get("content-type") ?? "").toLowerCase()
 
@@ -131,21 +163,6 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const key = getClientKey(request)
-  const rate = consumeRateLimit(key)
-
-  if (!rate.allowed) {
-    return new Response("Rate limit exceeded", {
-      status: 429,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "retry-after": String(rate.retryAfterSec),
-        "x-ratelimit-limit": String(rate.limit),
-        "x-ratelimit-remaining": String(rate.remaining),
-      },
-    })
-  }
-
   const abortSignal = request.signal
 
   let urlsText = ""
@@ -163,28 +180,62 @@ export async function POST(request: NextRequest): Promise<Response> {
     return plainResponse(400, "Invalid request body.")
   }
 
+  const key = getClientKey(request)
+  const optimisticRate = {
+    limit: Number.isFinite(RATE_LIMIT_MAX) && RATE_LIMIT_MAX > 0 ? RATE_LIMIT_MAX : 2,
+    remaining: 0,
+  }
+
   const cacheKey = buildZipCacheKey(normalizedUrls)
+  const memoryHit = readMemoryCachedZip(cacheKey)
+  if (memoryHit && memoryHit.length > 0) {
+    return buildZipResponse(memoryHit, "HIT_MEMORY", optimisticRate)
+  }
+
+  const inFlight = inFlightZipCache.get(cacheKey)
+  if (inFlight) {
+    try {
+      const pendingBytes = await inFlight
+      if (pendingBytes && pendingBytes.length > 0) {
+        return buildZipResponse(pendingBytes, "HIT_INFLIGHT", optimisticRate)
+      }
+    } catch {
+    }
+  }
+
   const cacheAvailable = await isS3CacheAvailable()
   if (cacheAvailable) {
     try {
       const cachedZip = await readCachedZip(cacheKey)
       if (cachedZip && cachedZip.length > 0) {
-        const responseBytes = Uint8Array.from(cachedZip)
-        return new Response(responseBytes.buffer, {
-          status: 200,
-          headers: {
-            "content-type": "application/zip",
-            "content-disposition": `attachment; filename="${buildZipName(new Date())}"`,
-            "cache-control": "no-store",
-            "x-cache-status": "HIT_S3",
-            "x-ratelimit-limit": String(rate.limit),
-            "x-ratelimit-remaining": String(rate.remaining),
-          },
-        })
+        writeMemoryCachedZip(cacheKey, cachedZip)
+        return buildZipResponse(cachedZip, "HIT_S3", optimisticRate)
       }
     } catch {
     }
   }
+
+  const rate = consumeRateLimit(key)
+
+  if (!rate.allowed) {
+    return new Response("Rate limit exceeded", {
+      status: 429,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "retry-after": String(rate.retryAfterSec),
+        "x-ratelimit-limit": String(rate.limit),
+        "x-ratelimit-remaining": String(rate.remaining),
+      },
+    })
+  }
+
+  let resolveInFlight: (value: Uint8Array | null) => void = () => {}
+  let rejectInFlight: (reason?: unknown) => void = () => {}
+  const inFlightPromise = new Promise<Uint8Array | null>((resolve, reject) => {
+    resolveInFlight = resolve
+    rejectInFlight = reject
+  })
+  inFlightZipCache.set(cacheKey, inFlightPromise)
 
   let prepared: Awaited<ReturnType<typeof preflightBooks>>
   try {
@@ -193,6 +244,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       abortSignal,
     })
   } catch (error) {
+    inFlightZipCache.delete(cacheKey)
+    rejectInFlight(error)
     if (error instanceof InputError) {
       return plainResponse(400, error.message)
     }
@@ -211,42 +264,51 @@ export async function POST(request: NextRequest): Promise<Response> {
   const captureChunks: Buffer[] = []
   let captureBytes = 0
   let captureDropped = false
-  let captureStream: PassThrough | null = null
+  const captureStream = new PassThrough()
+  archive.pipe(captureStream)
 
-  if (cacheAvailable) {
-    captureStream = new PassThrough()
-    archive.pipe(captureStream)
+  captureStream.on("data", (chunk: Buffer) => {
+    if (captureDropped) {
+      return
+    }
 
-    captureStream.on("data", (chunk: Buffer) => {
-      if (captureDropped) {
-        return
-      }
+    captureBytes += chunk.length
+    if (captureBytes > Math.max(1, MAX_CACHE_CAPTURE_BYTES)) {
+      captureDropped = true
+      captureChunks.length = 0
+      return
+    }
 
-      captureBytes += chunk.length
-      if (captureBytes > Math.max(1, MAX_CACHE_CAPTURE_BYTES)) {
-        captureDropped = true
-        captureChunks.length = 0
-        return
-      }
+    captureChunks.push(Buffer.from(chunk))
+  })
 
-      captureChunks.push(Buffer.from(chunk))
-    })
+  captureStream.on("end", () => {
+    if (captureDropped || captureChunks.length === 0) {
+      resolveInFlight(null)
+      inFlightZipCache.delete(cacheKey)
+      return
+    }
 
-    captureStream.on("end", () => {
-      if (captureDropped || captureChunks.length === 0) {
-        return
-      }
+    const merged = Buffer.concat(captureChunks)
+    const zipped = new Uint8Array(merged)
+    writeMemoryCachedZip(cacheKey, zipped)
+    resolveInFlight(zipped)
+    inFlightZipCache.delete(cacheKey)
+    if (cacheAvailable) {
+      void writeCachedZip(cacheKey, zipped).catch(() => {})
+    }
+  })
 
-      const merged = Buffer.concat(captureChunks)
-      void writeCachedZip(cacheKey, new Uint8Array(merged)).catch(() => {})
-    })
-  }
+  captureStream.on("error", (error) => {
+    rejectInFlight(error)
+    inFlightZipCache.delete(cacheKey)
+  })
 
   archive.on("error", (error: Error) => {
     output.destroy(error)
-    if (captureStream) {
-      captureStream.destroy(error)
-    }
+    rejectInFlight(error)
+    inFlightZipCache.delete(cacheKey)
+    captureStream.destroy(error)
   })
 
   const work = (async (): Promise<void> => {
@@ -297,6 +359,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   work.catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
+    rejectInFlight(error)
+    inFlightZipCache.delete(cacheKey)
     output.destroy(new Error(message))
   })
 
