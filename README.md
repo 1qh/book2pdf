@@ -56,11 +56,13 @@ Config via environment variables:
 
 Compatibility keys are also supported: `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.
 
-Copy env template:
+Copy env template to repo root:
 
 ```bash
-cp apps/web/.env.example apps/web/.env.local
+cp apps/web/.env.example .env
 ```
+
+Root scripts use `dotenv-cli` through `bun run with-env -- ...` and automatically load `/.env` when present.
 
 ## Local development
 
