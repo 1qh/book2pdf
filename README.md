@@ -59,7 +59,7 @@ Compatibility keys are also supported: `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KE
 Copy env template to repo root:
 
 ```bash
-cp apps/web/.env.example .env
+cp .env.example .env
 ```
 
 Because this repo uses Bun, running root scripts with `bun run ...` automatically loads `/.env`.
