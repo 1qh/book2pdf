@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+dist/
+.ruff_cache/
+*.tsbuildinfo
+
+output_pdfs/
+book2pdf_work/
+web_jobs/
+
+.DS_Store
+.vercel
