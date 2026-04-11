@@ -33,7 +33,7 @@ const OPTIONS = {
   timeoutMs: 45_000,
   retries: 4,
   maxUrls: 8,
-  maxPagesPerBook: 650,
+  maxPagesPerBook: 9999,
   maxTotalPages: 2200,
 }
 
